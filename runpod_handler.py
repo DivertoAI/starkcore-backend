@@ -1,12 +1,16 @@
-# handler.py
 from runpod.serverless.modules.rp_fastapi import RunpodFastAPI
 from main import app
 
-# Optional: define extra logic before/after the request
-# This is where you'd wrap logic if needed
 rp_app = RunpodFastAPI(app=app)
 
 @rp_app.run()
 def handler(event):
-    # Optionally inspect event["input"] to call specific logic
-    return {"message": "FastAPI backend is live"}
+    print("✅ Event received:", event)
+
+    api = event.get("input", {}).get("api", {})
+    if api.get("method") == "GET" and api.get("endpoint") == "/characters":
+        return [
+            {"id": "1", "name": "Test Character", "age": 22, "gender": "Female"}
+        ]
+
+    return {"error": "Not found"}
