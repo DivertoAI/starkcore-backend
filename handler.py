@@ -5,6 +5,7 @@ import uuid
 from io import BytesIO
 from PIL import Image
 from dotenv import load_dotenv
+from app.ai.runpod_handler import handler
 from huggingface_hub import login
 from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline
 from diffusers.models import UNet2DConditionModel
