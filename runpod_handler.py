@@ -1,9 +1,5 @@
-from runpod.serverless.modules.rp_fastapi import RunpodFastAPI
-from main import app
+from runpod.serverless import start
 
-rp_app = RunpodFastAPI(app=app)
-
-@rp_app.run()
 def handler(event):
     print("✅ Event received:", event)
     return [
@@ -16,3 +12,5 @@ def handler(event):
             "personalityDescription": "Testing RunPod output.",
         }
     ]
+
+start({"handler": handler})
