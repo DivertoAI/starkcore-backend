@@ -1,16 +1,14 @@
 from runpod.serverless import start
+from handler import handler as ai_handler  # Import your AI handler
 
-def handler(event):
+def entrypoint(event):
     print("✅ Event received:", event)
-    return [
-        {
-            "id": "1",
-            "name": "Debug Bot",
-            "age": 23,
-            "gender": "Female",
-            "image_url": "https://via.placeholder.com/150",
-            "personalityDescription": "Testing RunPod output.",
-        }
-    ]
+    
+    try:
+        response = ai_handler(event)
+        return { "output": response }
+    except Exception as e:
+        print("❌ Error:", str(e))
+        return { "error": str(e) }
 
-start({"handler": handler})
+start({"handler": entrypoint})
