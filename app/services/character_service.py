@@ -6,6 +6,8 @@ from datetime import datetime
 from app.utils.prompt_builder import build_prompt
 from app.utils.file_manager import save_image, save_text
 from app.core.config import CHARACTER_DIR  # central config path
+from app.services.handler import handler as runpod_handler
+
 
 def create_character(data):
     timestamp = int(datetime.now().timestamp())
@@ -13,24 +15,31 @@ def create_character(data):
     character_folder = os.path.join(CHARACTER_DIR, character_id)
     os.makedirs(character_folder, exist_ok=True)
 
-    # Build prompt
+    # Build prompt string
     prompt = build_prompt(data)
 
-    # Placeholder image (mocked)
-    image = Image.new("RGB", (512, 768), color="pink")
+    # Generate image using handler
+    generation_result = runpod_handler({
+        "mode": "txt2img",
+        "prompt": prompt,
+        "guidance_scale": 7.5,
+        "steps": 30
+    })
 
-    # Simple story generation
-    story = f"This is {data['name']}'s story."
+    tmp_image_path = generation_result["image_paths"][0]  # Don't overwrite
+    image = Image.open(tmp_image_path)
 
-    # Save files
+    # Save final image
     image_filename = f"{data['name']}.png"
-    image_path = os.path.join(character_folder, image_filename)
-    save_image(image, image_path)
+    final_image_path = os.path.join(character_folder, image_filename)
+    save_image(image, final_image_path)
 
+    # Save simple story
+    story = f"This is {data['name']}'s story."
     story_path = os.path.join(character_folder, "story.txt")
     save_text(story, story_path)
 
-    # Build metadata
+    # Metadata
     metadata = {
         **data,
         "id": character_id,
