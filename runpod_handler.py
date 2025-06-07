@@ -2,10 +2,21 @@ import subprocess
 import time
 from runpod.serverless import start
 import requests
+import socket
 
 # Start FastAPI in the background
 subprocess.Popen(["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"])
-time.sleep(2)  # wait for FastAPI to start
+def wait_for_server(host, port, timeout=15):
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            with socket.create_connection((host, port), timeout=2):
+                return True
+        except Exception:
+            time.sleep(0.5)
+    raise TimeoutError(f"Server on {host}:{port} did not start in time.")
+
+wait_for_server("127.0.0.1", 8000)
 
 def handler(event):
     print("✅ Event received:", event)
