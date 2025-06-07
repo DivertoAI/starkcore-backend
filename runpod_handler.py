@@ -1,7 +1,11 @@
+import subprocess
+import time
 from runpod.serverless import start
 import requests
 
-API_BASE = "http://127.0.0.1:8000"  # FastAPI runs inside the same container
+# Start FastAPI in the background
+subprocess.Popen(["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"])
+time.sleep(2)  # wait for FastAPI to start
 
 def handler(event):
     print("✅ Event received:", event)
@@ -14,18 +18,19 @@ def handler(event):
     method = api.get("method", "GET").upper()
     payload = api.get("body", None)
 
-    url = f"{API_BASE}{endpoint}"
     try:
+        url = f"http://127.0.0.1:8000{endpoint}"
+
         if method == "GET":
-            response = requests.get(url)
+            res = requests.get(url)
         elif method == "POST":
-            response = requests.post(url, json=payload)
+            res = requests.post(url, json=payload)
         else:
             return {"error": f"Unsupported method {method}"}
 
         return {
-            "status_code": response.status_code,
-            "data": response.json()
+            "status_code": res.status_code,
+            "data": res.json()
         }
 
     except Exception as e:
