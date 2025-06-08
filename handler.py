@@ -1,24 +1,19 @@
-# handler.py
-import torch
 import os
+import torch
 from diffusers import StableDiffusionPipeline
 from runpod.serverless import start
-from huggingface_hub import login
 
-HF_TOKEN = os.getenv("HUGGING_FACE_TOKEN")
-MODEL_ID = "RunDiffusion/Juggernaut-XL-v8"
+# Path to your model inside the RunPod-mounted volume
+MODEL_PATH = "/volumes/models/Juggernaut-XL-v8"
 device = "cuda"
 
-# Login and preload model ONCE
-if HF_TOKEN:
-    login(HF_TOKEN)
-
+# Load the model from local disk (volume) without using Hugging Face token
 pipe = StableDiffusionPipeline.from_pretrained(
-    MODEL_ID,
-    use_auth_token=HF_TOKEN,
+    MODEL_PATH,
     torch_dtype=torch.float16,
     safety_checker=None
 ).to(device)
+
 pipe.enable_xformers_memory_efficient_attention()
 
 def handler(event):
@@ -28,9 +23,11 @@ def handler(event):
         steps = int(event.get("steps", 30))
 
         image = pipe(prompt, guidance_scale=guidance, num_inference_steps=steps).images[0]
-        out_path = f"/tmp/output.png"
+        out_path = "/tmp/output.png"
         image.save(out_path)
+
         return {"image_paths": [out_path]}
+
     except Exception as e:
         return {"error": str(e)}
 
