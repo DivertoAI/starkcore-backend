@@ -10,122 +10,121 @@ from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline
 from diffusers.models import UNet2DConditionModel
 from peft import PeftModel, PeftConfig
 
-# Load environment variables
+# Load .env.local for HuggingFace token
 load_dotenv(dotenv_path=".env.local")
 HF_TOKEN = os.getenv("HUGGING_FACE_TOKEN")
 MODEL_ID = "RunDiffusion/Juggernaut-XL-v8"
-device = "cuda"
+DEVICE = "cuda"
 
+# Authenticate with Hugging Face
 if HF_TOKEN:
     login(HF_TOKEN)
 
 def load_pipeline_with_lora(model_id: str, lora_repo: str = None):
-    """Load SD pipelines and optionally apply a LoRA."""
+    """Load txt2img and img2img pipelines, optionally with LoRA support."""
     txt2img = StableDiffusionPipeline.from_pretrained(
         model_id,
-        use_auth_token=HF_TOKEN,
         torch_dtype=torch.float16,
+        use_auth_token=HF_TOKEN,
         use_safetensors=True,
         safety_checker=None
-    ).to(device)
+    ).to(DEVICE)
     txt2img.enable_xformers_memory_efficient_attention()
 
     img2img = StableDiffusionImg2ImgPipeline.from_pretrained(
         model_id,
-        use_auth_token=HF_TOKEN,
         torch_dtype=torch.float16,
+        use_auth_token=HF_TOKEN,
         use_safetensors=True,
         safety_checker=None
-    ).to(device)
+    ).to(DEVICE)
     img2img.enable_xformers_memory_efficient_attention()
 
     if lora_repo:
-        print(f"Loading LoRA: {lora_repo}")
+        print(f"🔗 Loading LoRA: {lora_repo}")
         unet_base = UNet2DConditionModel.from_pretrained(
             model_id,
             subfolder="unet",
+            torch_dtype=torch.float16,
             use_auth_token=HF_TOKEN,
-            torch_dtype=torch.float16
         )
         lora_config = PeftConfig.from_pretrained(lora_repo, use_auth_token=HF_TOKEN)
         unet_lora = PeftModel.from_pretrained(unet_base, lora_repo, use_auth_token=HF_TOKEN)
         unet_lora = unet_lora.merge_and_unload()
+
         txt2img.unet = unet_lora
         img2img.unet = unet_lora
 
     return txt2img, img2img
 
 def load_image_from_url(url: str) -> Image.Image:
-    """Load an image from a URL for img2img use."""
     response = requests.get(url)
     return Image.open(BytesIO(response.content)).convert("RGB")
 
-def save_image_to_tmp_and_get_path(image: Image.Image) -> str:
-    """Save image to temporary file and return its path."""
-    file_name = f"/tmp/{uuid.uuid4().hex}.png"
-    image.save(file_name, format="PNG")
-    return file_name
+def save_image_to_tmp(image: Image.Image) -> str:
+    path = f"/tmp/{uuid.uuid4().hex}.png"
+    image.save(path, format="PNG")
+    return path
 
 def handler(event: dict) -> dict:
     """
-    Main RunPod handler.
+    RunPod handler entrypoint.
 
-    Input JSON:
+    Input format:
     {
         "mode": "txt2img" | "img2img",
-        "prompt": "..." or ["..."],
+        "prompt": "...",
         "image_url": "...",        # required for img2img
-        "strength": 0.6,           # optional for img2img
+        "strength": 0.6,           # optional
         "guidance_scale": 7.5,
         "steps": 30,
         "lora_repo": "user/lora"   # optional
     }
 
-    Returns:
+    Output format:
     {
-        "image_paths": ["/tmp/image.png", ...]
+        "image_paths": ["/tmp/abc.png"]
     }
     """
-    mode = event.get("mode", "txt2img")
-    prompts = event.get("prompt", "masterpiece, high detail, character design")
-    guidance_scale = float(event.get("guidance_scale", 7.5))
-    steps = max(5, int(event.get("steps", 30)))
-    strength = float(event.get("strength", 0.75))
-    lora_repo = event.get("lora_repo")
+    try:
+        mode = event.get("mode", "txt2img")
+        prompts = event.get("prompt", "masterpiece, high detail")
+        if isinstance(prompts, str):
+            prompts = [prompts]
 
-    if isinstance(prompts, str):
-        prompts = [prompts]
+        strength = float(event.get("strength", 0.75))
+        guidance_scale = float(event.get("guidance_scale", 7.5))
+        steps = max(5, int(event.get("steps", 30)))
+        lora_repo = event.get("lora_repo")
 
-    txt2img_pipe, img2img_pipe = load_pipeline_with_lora(MODEL_ID, lora_repo)
+        txt2img, img2img = load_pipeline_with_lora(MODEL_ID, lora_repo)
 
-    init_image = None
-    if mode == "img2img":
-        image_url = event.get("image_url")
-        if not image_url:
-            return {"error": "Missing 'image_url' for img2img mode"}
-        init_image = load_image_from_url(image_url)
+        image_paths = []
+        for prompt in prompts:
+            enriched = f"{prompt}, ultra realistic, cinematic lighting, 4k, soft shadows"
+            if mode == "img2img":
+                image_url = event.get("image_url")
+                if not image_url:
+                    return {"error": "Missing 'image_url' for img2img mode"}
+                init_image = load_image_from_url(image_url)
+                result = img2img(
+                    prompt=enriched,
+                    image=init_image,
+                    strength=strength,
+                    guidance_scale=guidance_scale,
+                    num_inference_steps=steps
+                ).images[0]
+            else:
+                result = txt2img(
+                    prompt=enriched,
+                    guidance_scale=guidance_scale,
+                    num_inference_steps=steps
+                ).images[0]
 
-    default_suffix = ", ultra realistic, 4k, cinematic lighting, soft shadows, intricate detail"
-    image_paths = []
+            path = save_image_to_tmp(result)
+            image_paths.append(path)
 
-    for prompt in prompts:
-        enriched_prompt = f"{prompt}{default_suffix}" if "realistic" not in prompt.lower() else prompt
-
-        if mode == "img2img":
-            result = img2img_pipe(
-                prompt=enriched_prompt,
-                image=init_image,
-                strength=strength,
-                guidance_scale=guidance_scale,
-                num_inference_steps=steps
-            ).images[0]
-        else:
-            result = txt2img_pipe(
-                prompt=enriched_prompt,
-                guidance_scale=guidance_scale,
-                num_inference_steps=steps
-            ).images[0]
-
-        image_paths.append(save_image_to_tmp_and_get_path(result))
-
-    return {"image_paths": image_paths}
+        return {"image_paths": image_paths}
+    
+    except Exception as e:
+        return {"error": str(e)}
