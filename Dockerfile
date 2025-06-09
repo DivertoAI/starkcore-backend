@@ -15,8 +15,8 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy your handler code
+# Copy your entire app into the container
 COPY . .
 
-# Run the handler directly
-CMD ["python", "handler.py"]
+# Must use handler.py (or runpod_handler.py) that includes `start({"handler": ...})`
+CMD ["python", "-u", "handler.py"]
