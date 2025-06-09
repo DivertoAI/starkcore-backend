@@ -1,26 +1,27 @@
 import os
 import torch
+import traceback
 from diffusers import StableDiffusionPipeline
 from runpod.serverless import start
 from dotenv import load_dotenv
+import warnings
 
-# Load environment variables from .env.local (if running locally)
+# Load env vars (locally)
 load_dotenv(dotenv_path=".env.local", override=True)
 
-# Hugging Face token and model config
+# Hugging Face auth
 HF_TOKEN = os.getenv("HUGGING_FACE_TOKEN")
 MODEL_REPO = "RunDiffusion/Juggernaut-XL-v8"
-
-# ✅ RunPod volume mount path
 MODEL_PATH = "/runpod-volume/juggernaut-xl"
-
-# Device selection (safe fallback)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Ensure volume directory exists
+# Optional: suppress safety checker warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="diffusers")
+
+# Ensure mount path exists
 os.makedirs(MODEL_PATH, exist_ok=True)
 
-# 🔁 Download model to /runpod-volume if not already cached
+# Download model if needed
 def download_model_if_needed():
     expected_file = os.path.join(MODEL_PATH, "model_index.json")
     if not os.path.exists(expected_file):
@@ -35,33 +36,42 @@ def download_model_if_needed():
         pipe.save_pretrained(MODEL_PATH)
         del pipe
     else:
-        print("✅ Model already cached in /runpod-volume")
+        print("✅ Model already cached at /runpod-volume")
 
 download_model_if_needed()
 
-# ✅ Load model from cached path
+# Load pipeline from cached model
 pipe = StableDiffusionPipeline.from_pretrained(
     MODEL_PATH,
     torch_dtype=torch.float16,
     safety_checker=None
 ).to(device)
 
-pipe.enable_xformers_memory_efficient_attention()
+# Try enabling xformers if supported
+try:
+    if device == "cuda":
+        pipe.enable_xformers_memory_efficient_attention()
+        print("⚡ xformers memory-efficient attention enabled.")
+except Exception as e:
+    print(f"⚠️ Could not enable xformers: {e}")
 
-# 🚀 Main handler
+# RunPod handler
 def handler(event):
     try:
         prompt = event.get("prompt", "masterpiece, beautiful girl, cinematic lighting")
         guidance = float(event.get("guidance_scale", 7.5))
         steps = int(event.get("steps", 30))
 
+        print(f"🎨 Generating: '{prompt}' | steps: {steps}, scale: {guidance}")
         image = pipe(prompt, guidance_scale=guidance, num_inference_steps=steps).images[0]
+
         out_path = "/tmp/output.png"
         image.save(out_path)
 
+        print("✅ Generation complete.")
         return {"image_paths": [out_path]}
     except Exception as e:
-        return {"error": str(e)}
+        print("❌ Error during generation:", e)
+        return {"error": str(e), "trace": traceback.format_exc()}
 
-# 🧠 Start RunPod serverless handler
 start({"handler": handler})
