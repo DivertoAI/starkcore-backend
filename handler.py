@@ -6,95 +6,108 @@ from dotenv import load_dotenv
 from diffusers import StableDiffusionXLPipeline
 from runpod.serverless import start
 
-# Load environment variables (for local dev)
-load_dotenv(dotenv_path=".env.local", override=True)
+# ──────────────────────────────────────────────────────────────────────────────
+#  ENV & CONSTANTS
+# ──────────────────────────────────────────────────────────────────────────────
+load_dotenv(".env.local", override=True)
 
-# Constants
-HF_TOKEN = os.getenv("HUGGING_FACE_TOKEN")
+HF_TOKEN   = os.getenv("HUGGING_FACE_TOKEN")
 MODEL_REPO = "RunDiffusion/Juggernaut-XL-v8"
 MODEL_PATH = "/runpod-volume/juggernaut-xl"
-device = "cuda" if torch.cuda.is_available() else "cpu"
+DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Suppress optional warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="diffusers")
-
-# Ensure model volume directory exists
 os.makedirs(MODEL_PATH, exist_ok=True)
 
-# 🔁 Download model if needed
-def download_model_if_needed():
-    model_index_file = os.path.join(MODEL_PATH, "model_index.json")
-    if not os.path.exists(model_index_file):
-        print("🔽 Downloading model to /runpod-volume...")
+# ──────────────────────────────────────────────────────────────────────────────
+#  FETCH MODEL (only first run)
+# ──────────────────────────────────────────────────────────────────────────────
+def download_model_if_needed() -> None:
+    if not os.path.exists(os.path.join(MODEL_PATH, "model_index.json")):
+        print("🔽  First run: downloading Juggernaut-XL to /runpod-volume …")
         pipe = StableDiffusionXLPipeline.from_pretrained(
             MODEL_REPO,
             use_auth_token=HF_TOKEN,
             torch_dtype=torch.float16
         )
+
+        # Core pipeline
         pipe.save_pretrained(MODEL_PATH)
-        pipe.tokenizer.save_pretrained(MODEL_PATH)
-        pipe.tokenizer_2.save_pretrained(MODEL_PATH)
-        pipe.text_encoder.save_pretrained(os.path.join(MODEL_PATH, "text_encoder"))
-        pipe.text_encoder_2.save_pretrained(os.path.join(MODEL_PATH, "text_encoder_2"))
+
+        # Tokenizers **must** live in sub-folders the loader expects
+        pipe.tokenizer.save_pretrained(os.path.join(MODEL_PATH, "tokenizer"))
+        pipe.tokenizer_2.save_pretrained(os.path.join(MODEL_PATH, "tokenizer_2"))
+
+        # Text-encoders are already saved automatically inside their own sub-folders
+        # by pipe.save_pretrained() for diffusers ≥0.23, so no extra calls needed.
+
         del pipe
     else:
-        print("✅ Model already cached at /runpod-volume")
+        print("✅  Model already cached at /runpod-volume")
 
 download_model_if_needed()
 
-# ✅ Load model
+# ──────────────────────────────────────────────────────────────────────────────
+#  LOAD MODEL FOR INFERENCE
+# ──────────────────────────────────────────────────────────────────────────────
 pipe = StableDiffusionXLPipeline.from_pretrained(
     MODEL_PATH,
     torch_dtype=torch.float16
-).to(device)
+).to(DEVICE)
 
-# Enable xformers if available
 try:
-    if device == "cuda":
+    if DEVICE == "cuda":
         pipe.enable_xformers_memory_efficient_attention()
-        print("⚡ xformers memory-efficient attention enabled.")
-except Exception as e:
-    print(f"⚠️ Could not enable xformers: {e}")
+        print("⚡  xFormers memory-efficient attention enabled")
+except Exception as err:
+    print(f"⚠️  Could not enable xFormers: {err}")
 
-# 🚀 Main handler
+# ──────────────────────────────────────────────────────────────────────────────
+#  MAIN HANDLER
+# ──────────────────────────────────────────────────────────────────────────────
 def handler(event):
+    """
+    Expects JSON like:
+    {
+      "input": {
+         "prompt": "your prompt",
+         "guidance_scale": 7.5,
+         "steps": 30
+      }
+    }
+    """
     try:
-        input_data = event.get("input", {})
-        if not isinstance(input_data, dict):
-            raise ValueError("Expected 'input' to be a dictionary.")
+        data = event.get("input", {})
+        if not isinstance(data, dict):
+            raise ValueError("Input payload must be a dict under key 'input'")
 
-        prompt = input_data.get("prompt", "masterpiece, beautiful girl, cinematic lighting")
-        guidance = float(input_data.get("guidance_scale", 7.5))
-        steps = int(input_data.get("steps", 30))
+        prompt   = data.get("prompt", "masterpiece, beautiful girl, cinematic lighting")
+        guidance = float(data.get("guidance_scale", 7.5))
+        steps    = int(data.get("steps", 30))
 
-        print(f"🎨 Prompt: '{prompt}' | Steps: {steps} | Guidance: {guidance}")
+        print(f"🎨  Prompt: {prompt!r} | Steps: {steps} | Guidance: {guidance}")
 
-        # Encode prompt properly for SDXL
-        prompt_embeds, pooled_embeds, negative_prompt_embeds, negative_pooled_embeds = pipe.encode_prompt(prompt)
-
-        # Generate image
         image = pipe(
-            prompt_embeds=prompt_embeds,
-            pooled_prompt_embeds=pooled_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
-            negative_pooled_prompt_embeds=negative_pooled_embeds,
+            prompt,
             guidance_scale=guidance,
             num_inference_steps=steps
         ).images[0]
 
         out_path = "/tmp/output.png"
         image.save(out_path)
+        print("✅  Image generation successful")
 
-        print("✅ Image generation successful.")
         return {"image_paths": [out_path]}
 
-    except Exception as e:
-        print("❌ Error during generation:")
+    except Exception as exc:
+        print("❌  Generation failed")
         traceback.print_exc()
         return {
-            "error": str(e),
+            "error": str(exc),
             "trace": traceback.format_exc()
         }
 
-# Start RunPod serverless handler
+# ──────────────────────────────────────────────────────────────────────────────
+#  START SERVERLESS HANDLER
+# ──────────────────────────────────────────────────────────────────────────────
 start({"handler": handler})
