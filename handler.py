@@ -55,6 +55,16 @@ try:
 except Exception as e:
     print(f"⚠️ Could not enable xformers: {e}")
 
+# ✅ Patch: Ensure 'added_cond_kwargs' is never None
+if not hasattr(pipe, "_original_call"):
+    pipe._original_call = pipe.__call__
+
+    def safe_call(*args, **kwargs):
+        kwargs["added_cond_kwargs"] = kwargs.get("added_cond_kwargs") or {}
+        return pipe._original_call(*args, **kwargs)
+
+    pipe.__call__ = safe_call
+
 # 🚀 Main handler
 def handler(event):
     try:
@@ -68,12 +78,10 @@ def handler(event):
 
         print(f"🎨 Prompt: '{prompt}' | Steps: {steps} | Guidance: {guidance}")
 
-        # ✅ Fix: pass empty added_cond_kwargs to avoid NoneType error
         image = pipe(
             prompt,
             guidance_scale=guidance,
-            num_inference_steps=steps,
-            added_cond_kwargs={}  # Prevents unet_2d_condition error
+            num_inference_steps=steps
         ).images[0]
 
         out_path = "/tmp/output.png"
