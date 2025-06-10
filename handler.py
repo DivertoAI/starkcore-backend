@@ -68,7 +68,14 @@ def handler(event):
 
         print(f"🎨 Prompt: '{prompt}' | Steps: {steps} | Guidance: {guidance}")
 
-        image = pipe(prompt, guidance_scale=guidance, num_inference_steps=steps).images[0]
+        # ✅ Fix: pass empty added_cond_kwargs to avoid NoneType error
+        image = pipe(
+            prompt,
+            guidance_scale=guidance,
+            num_inference_steps=steps,
+            added_cond_kwargs={}  # Prevents unet_2d_condition error
+        ).images[0]
+
         out_path = "/tmp/output.png"
         image.save(out_path)
 
