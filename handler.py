@@ -58,9 +58,10 @@ except Exception as e:
 # RunPod handler
 def handler(event):
     try:
-        prompt = event.get("prompt", "masterpiece, beautiful girl, cinematic lighting")
-        guidance = float(event.get("guidance_scale", 7.5))
-        steps = int(event.get("steps", 30))
+        input_data = event.get("input", {})  # 💡 always use 'input' key with fallback
+        prompt = input_data.get("prompt", "masterpiece, beautiful girl, cinematic lighting")
+        guidance = float(input_data.get("guidance_scale", 7.5))
+        steps = int(input_data.get("steps", 30))
 
         print(f"🎨 Generating: '{prompt}' | steps: {steps}, scale: {guidance}")
         image = pipe(prompt, guidance_scale=guidance, num_inference_steps=steps).images[0]
@@ -70,8 +71,13 @@ def handler(event):
 
         print("✅ Generation complete.")
         return {"image_paths": [out_path]}
+
     except Exception as e:
         print("❌ Error during generation:", e)
-        return {"error": str(e), "trace": traceback.format_exc()}
+        return {
+            "error": str(e),
+            "trace": traceback.format_exc()
+        }
 
+# 🔁 Start serverless worker
 start({"handler": handler})
