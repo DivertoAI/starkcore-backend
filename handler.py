@@ -3,7 +3,7 @@ import torch
 import traceback
 import warnings
 from dotenv import load_dotenv
-from diffusers import StableDiffusionPipeline
+from diffusers import StableDiffusionXLPipeline
 from runpod.serverless import start
 
 # Load environment variables (for local dev)
@@ -26,7 +26,7 @@ def download_model_if_needed():
     model_index_file = os.path.join(MODEL_PATH, "model_index.json")
     if not os.path.exists(model_index_file):
         print("🔽 Downloading model to /runpod-volume...")
-        pipe = StableDiffusionPipeline.from_pretrained(
+        pipe = StableDiffusionXLPipeline.from_pretrained(
             MODEL_REPO,
             use_auth_token=HF_TOKEN,
             torch_dtype=torch.float16,
@@ -41,7 +41,7 @@ def download_model_if_needed():
 download_model_if_needed()
 
 # ✅ Load model
-pipe = StableDiffusionPipeline.from_pretrained(
+pipe = StableDiffusionXLPipeline.from_pretrained(
     MODEL_PATH,
     torch_dtype=torch.float16,
     safety_checker=None
@@ -54,16 +54,6 @@ try:
         print("⚡ xformers memory-efficient attention enabled.")
 except Exception as e:
     print(f"⚠️ Could not enable xformers: {e}")
-
-# ✅ Patch: Ensure 'added_cond_kwargs' is never None
-if not hasattr(pipe, "_original_call"):
-    pipe._original_call = pipe.__call__
-
-    def safe_call(*args, **kwargs):
-        kwargs["added_cond_kwargs"] = kwargs.get("added_cond_kwargs") or {}
-        return pipe._original_call(*args, **kwargs)
-
-    pipe.__call__ = safe_call
 
 # 🚀 Main handler
 def handler(event):
@@ -78,8 +68,14 @@ def handler(event):
 
         print(f"🎨 Prompt: '{prompt}' | Steps: {steps} | Guidance: {guidance}")
 
+        # Encode prompt
+        prompt_embeds, pooled_embeds, negative_prompt_embeds, negative_pooled_embeds = pipe.encode_prompt(prompt)
+
         image = pipe(
-            prompt,
+            prompt_embeds=prompt_embeds,
+            pooled_prompt_embeds=pooled_embeds,
+            negative_prompt_embeds=negative_prompt_embeds,
+            negative_pooled_prompt_embeds=negative_pooled_embeds,
             guidance_scale=guidance,
             num_inference_steps=steps
         ).images[0]
