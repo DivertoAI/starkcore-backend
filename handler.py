@@ -29,11 +29,13 @@ def download_model_if_needed():
         pipe = StableDiffusionXLPipeline.from_pretrained(
             MODEL_REPO,
             use_auth_token=HF_TOKEN,
-            torch_dtype=torch.float16,
-            safety_checker=None,
-            cache_dir=MODEL_PATH
+            torch_dtype=torch.float16
         )
         pipe.save_pretrained(MODEL_PATH)
+        pipe.tokenizer.save_pretrained(MODEL_PATH)
+        pipe.tokenizer_2.save_pretrained(MODEL_PATH)
+        pipe.text_encoder.save_pretrained(os.path.join(MODEL_PATH, "text_encoder"))
+        pipe.text_encoder_2.save_pretrained(os.path.join(MODEL_PATH, "text_encoder_2"))
         del pipe
     else:
         print("✅ Model already cached at /runpod-volume")
@@ -43,8 +45,7 @@ download_model_if_needed()
 # ✅ Load model
 pipe = StableDiffusionXLPipeline.from_pretrained(
     MODEL_PATH,
-    torch_dtype=torch.float16,
-    safety_checker=None
+    torch_dtype=torch.float16
 ).to(device)
 
 # Enable xformers if available
@@ -68,9 +69,10 @@ def handler(event):
 
         print(f"🎨 Prompt: '{prompt}' | Steps: {steps} | Guidance: {guidance}")
 
-        # Encode prompt
+        # Encode prompt properly for SDXL
         prompt_embeds, pooled_embeds, negative_prompt_embeds, negative_pooled_embeds = pipe.encode_prompt(prompt)
 
+        # Generate image
         image = pipe(
             prompt_embeds=prompt_embeds,
             pooled_prompt_embeds=pooled_embeds,
