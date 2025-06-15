@@ -8,37 +8,44 @@ from transformers import CLIPTokenizer
 from runpod.serverless import start
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  ENV & CONSTANTS
+#  ENV SETUP
 # ──────────────────────────────────────────────────────────────────────────────
 load_dotenv(".env.local", override=True)
 
-# Patch HF environment for stability
+# Ensure all HuggingFace caching uses network-mounted volume
+os.environ["HF_HOME"] = "/runpod-volume/huggingface"
+os.environ["TRANSFORMERS_CACHE"] = "/runpod-volume/huggingface"
+os.environ["HF_HUB_CACHE"] = "/runpod-volume/huggingface"
+
+# Disable extras
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 
+# Constants
 HF_TOKEN   = os.getenv("HUGGING_FACE_TOKEN")
 MODEL_REPO = "RunDiffusion/Juggernaut-XL-v8"
 MODEL_PATH = "/runpod-volume/juggernaut-xl"
 DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
 
+# Silence unimportant warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="diffusers")
 os.makedirs(MODEL_PATH, exist_ok=True)
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  FETCH MODEL (only first run)
+#  DOWNLOAD MODEL IF NEEDED
 # ──────────────────────────────────────────────────────────────────────────────
 def download_model_if_needed():
-    if not os.path.exists(os.path.join(MODEL_PATH, "model_index.json")):
+    model_index = os.path.join(MODEL_PATH, "model_index.json")
+    if not os.path.exists(model_index):
         print("🔽 First run: downloading Juggernaut-XL …")
         pipe = StableDiffusionXLPipeline.from_pretrained(
             MODEL_REPO,
             use_auth_token=HF_TOKEN,
-            torch_dtype=torch.float16
+            torch_dtype=torch.float16,
+            cache_dir=os.environ["HF_HOME"]
         )
         pipe.save_pretrained(MODEL_PATH)
-
-        # Save tokenizers explicitly to avoid fallback issues
         pipe.tokenizer.save_pretrained(os.path.join(MODEL_PATH, "tokenizer"))
         pipe.tokenizer_2.save_pretrained(os.path.join(MODEL_PATH, "tokenizer_2"))
         del pipe
@@ -55,22 +62,22 @@ pipe = StableDiffusionXLPipeline.from_pretrained(
     torch_dtype=torch.float16
 ).to(DEVICE)
 
-# Restore missing tokenizers (if needed)
+# Restore tokenizers if missing
 if pipe.tokenizer is None:
-    print("🩹 tokenizer missing — reloading")
+    print("🩹 tokenizer missing — restoring from repo")
     pipe.tokenizer = CLIPTokenizer.from_pretrained(
         MODEL_REPO, subfolder="tokenizer", use_auth_token=HF_TOKEN
     )
     pipe.tokenizer.save_pretrained(os.path.join(MODEL_PATH, "tokenizer"))
 
 if pipe.tokenizer_2 is None:
-    print("🩹 tokenizer_2 missing — reloading")
+    print("🩹 tokenizer_2 missing — restoring from repo")
     pipe.tokenizer_2 = CLIPTokenizer.from_pretrained(
         MODEL_REPO, subfolder="tokenizer_2", use_auth_token=HF_TOKEN
     )
     pipe.tokenizer_2.save_pretrained(os.path.join(MODEL_PATH, "tokenizer_2"))
 
-# Try enabling xformers
+# Enable xFormers if available
 try:
     if DEVICE == "cuda":
         pipe.enable_xformers_memory_efficient_attention()
@@ -79,7 +86,7 @@ except Exception as e:
     print(f"⚠️ Could not enable xFormers: {e}")
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  MAIN HANDLER
+#  HANDLER
 # ──────────────────────────────────────────────────────────────────────────────
 def handler(event):
     try:
@@ -98,8 +105,8 @@ def handler(event):
             guidance_scale=guidance,
             num_inference_steps=steps
         )
-
         image = result.images[0]
+
         out_path = "/tmp/output.png"
         image.save(out_path)
 
@@ -109,7 +116,10 @@ def handler(event):
     except Exception as exc:
         print("❌ Generation failed")
         traceback.print_exc()
-        return {"error": str(exc), "trace": traceback.format_exc()}
+        return {
+            "error": str(exc),
+            "trace": traceback.format_exc()
+        }
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  RUNPOD ENTRYPOINT
