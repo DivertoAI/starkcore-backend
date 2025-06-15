@@ -4,9 +4,12 @@ import traceback
 import warnings
 import shutil
 from dotenv import load_dotenv
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
 from diffusers import StableDiffusionXLPipeline
 from transformers import CLIPTokenizer
-from runpod.serverless import start
+import uvicorn
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  ENV SETUP
@@ -90,45 +93,47 @@ except Exception as e:
     print(f"⚠️ Could not enable xFormers: {e}")
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  HANDLER
+#  FASTAPI APP
 # ──────────────────────────────────────────────────────────────────────────────
-def handler(event):
+class GenerationInput(BaseModel):
+    prompt: str = "masterpiece, beautiful girl, cinematic lighting"
+    guidance_scale: float = 7.5
+    steps: int = 30
+
+app = FastAPI()
+
+@app.post("/generate")
+async def generate_image(data: GenerationInput):
     try:
-        data = event.get("input", {})
-        if not isinstance(data, dict):
-            raise ValueError("Expected 'input' to be a dictionary")
-
-        prompt   = data.get("prompt", "masterpiece, beautiful girl, cinematic lighting")
-        guidance = float(data.get("guidance_scale", 7.5))
-        steps    = int(data.get("steps", 30))
-
-        print(f"🎨 Prompt: {prompt!r} | Steps: {steps} | Guidance: {guidance}")
+        print(f"🎨 Prompt: {data.prompt!r} | Steps: {data.steps} | Guidance: {data.guidance_scale}")
 
         result = pipe(
-            prompt,
-            guidance_scale=guidance,
-            num_inference_steps=steps
+            data.prompt,
+            guidance_scale=data.guidance_scale,
+            num_inference_steps=data.steps
         )
 
         image = result.images[0]
-        tmp_path = "/tmp/output.png"
-        public_path = "/runpod-volume/public/output.png"
-        image.save(tmp_path, format="PNG")
-        os.makedirs(os.path.dirname(public_path), exist_ok=True)
-        shutil.copy(tmp_path, public_path)
+        out_path = "/tmp/output.png"
+        image.save(out_path, format="PNG")
 
         print("✅ Image generation successful")
-        return {"image_paths": ["/output.png"]}
+        return {"image_url": "/output.png"}
 
     except Exception as exc:
         print("❌ Generation failed")
         traceback.print_exc()
-        return {
+        return JSONResponse(status_code=500, content={
             "error": str(exc),
             "trace": traceback.format_exc()
-        }
+        })
 
-# ──────────────────────────────────────────────────────────────────────────────
-#  START HANDLER
-# ──────────────────────────────────────────────────────────────────────────────
-start({"handler": handler})
+@app.get("/output.png")
+async def get_output_image():
+    image_path = "/tmp/output.png"
+    if os.path.exists(image_path):
+        return FileResponse(image_path, media_type="image/png")
+    return JSONResponse(status_code=404, content={"error": "Image not found"})
+
+if __name__ == "__main__":
+    uvicorn.run("handler:app", host="0.0.0.0", port=3000, reload=True)
