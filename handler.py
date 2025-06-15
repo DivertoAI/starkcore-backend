@@ -2,6 +2,7 @@ import os
 import torch
 import traceback
 import warnings
+import shutil
 from dotenv import load_dotenv
 from diffusers import StableDiffusionXLPipeline
 from transformers import CLIPTokenizer
@@ -12,28 +13,32 @@ from runpod.serverless import start
 # ──────────────────────────────────────────────────────────────────────────────
 load_dotenv(".env.local", override=True)
 
-# Ensure all HuggingFace caching uses network-mounted volume
+# Force Hugging Face to cache in mounted volume
 os.environ["HF_HOME"] = "/runpod-volume/huggingface"
 os.environ["TRANSFORMERS_CACHE"] = "/runpod-volume/huggingface"
 os.environ["HF_HUB_CACHE"] = "/runpod-volume/huggingface"
-
-# Disable extras
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 
-# Constants
 HF_TOKEN   = os.getenv("HUGGING_FACE_TOKEN")
 MODEL_REPO = "RunDiffusion/Juggernaut-XL-v8"
 MODEL_PATH = "/runpod-volume/juggernaut-xl"
 DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Silence unimportant warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="diffusers")
 os.makedirs(MODEL_PATH, exist_ok=True)
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  DOWNLOAD MODEL IF NEEDED
+#  CLEAN BROKEN SNAPSHOTS IF NEEDED
+# ──────────────────────────────────────────────────────────────────────────────
+SNAPSHOT_ROOT = os.path.join(os.environ["HF_HOME"], "models--RunDiffusion--Juggernaut-XL-v8")
+if os.path.exists(SNAPSHOT_ROOT):
+    print("🧹 Removing potential broken HF cache…")
+    shutil.rmtree(SNAPSHOT_ROOT, ignore_errors=True)
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  DOWNLOAD MODEL IF NOT CACHED
 # ──────────────────────────────────────────────────────────────────────────────
 def download_model_if_needed():
     model_index = os.path.join(MODEL_PATH, "model_index.json")
@@ -41,7 +46,6 @@ def download_model_if_needed():
         print("🔽 First run: downloading Juggernaut-XL …")
         pipe = StableDiffusionXLPipeline.from_pretrained(
             MODEL_REPO,
-            use_auth_token=HF_TOKEN,
             torch_dtype=torch.float16,
             cache_dir=os.environ["HF_HOME"]
         )
@@ -62,22 +66,22 @@ pipe = StableDiffusionXLPipeline.from_pretrained(
     torch_dtype=torch.float16
 ).to(DEVICE)
 
-# Restore tokenizers if missing
+# Restore missing tokenizers if needed
 if pipe.tokenizer is None:
-    print("🩹 tokenizer missing — restoring from repo")
+    print("🩹 tokenizer missing — restoring")
     pipe.tokenizer = CLIPTokenizer.from_pretrained(
         MODEL_REPO, subfolder="tokenizer", use_auth_token=HF_TOKEN
     )
     pipe.tokenizer.save_pretrained(os.path.join(MODEL_PATH, "tokenizer"))
 
 if pipe.tokenizer_2 is None:
-    print("🩹 tokenizer_2 missing — restoring from repo")
+    print("🩹 tokenizer_2 missing — restoring")
     pipe.tokenizer_2 = CLIPTokenizer.from_pretrained(
         MODEL_REPO, subfolder="tokenizer_2", use_auth_token=HF_TOKEN
     )
     pipe.tokenizer_2.save_pretrained(os.path.join(MODEL_PATH, "tokenizer_2"))
 
-# Enable xFormers if available
+# Enable memory-efficient attention
 try:
     if DEVICE == "cuda":
         pipe.enable_xformers_memory_efficient_attention()
@@ -105,10 +109,10 @@ def handler(event):
             guidance_scale=guidance,
             num_inference_steps=steps
         )
-        image = result.images[0]
 
+        image = result.images[0]
         out_path = "/tmp/output.png"
-        image.save(out_path)
+        image.save(out_path, format="PNG")
 
         print("✅ Image generation successful")
         return {"image_paths": [out_path]}
@@ -122,6 +126,6 @@ def handler(event):
         }
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  RUNPOD ENTRYPOINT
+#  START HANDLER
 # ──────────────────────────────────────────────────────────────────────────────
 start({"handler": handler})
