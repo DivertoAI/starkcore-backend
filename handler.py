@@ -114,6 +114,7 @@ def handler(event):
         tmp_path = "/tmp/output.png"
         public_path = "/runpod-volume/public/output.png"
         image.save(tmp_path, format="PNG")
+        os.makedirs(os.path.dirname(public_path), exist_ok=True)
         shutil.copy(tmp_path, public_path)
 
         print("✅ Image generation successful")
