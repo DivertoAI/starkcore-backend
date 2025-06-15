@@ -111,11 +111,13 @@ def handler(event):
         )
 
         image = result.images[0]
-        out_path = "/tmp/output.png"
-        image.save(out_path, format="PNG")
+        tmp_path = "/tmp/output.png"
+        public_path = "/runpod-volume/public/output.png"
+        image.save(tmp_path, format="PNG")
+        shutil.copy(tmp_path, public_path)
 
         print("✅ Image generation successful")
-        return {"image_paths": [out_path]}
+        return {"image_paths": ["/output.png"]}
 
     except Exception as exc:
         print("❌ Generation failed")
